@@ -9,7 +9,7 @@ foreach ($petProcess in @(Get-Process -Name LMServicePet -ErrorAction SilentlyCo
     }
 }
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
-foreach ($file in @('LMServicePet.exe','LMServicePet.exe.config','account_service.py','dragon-girl.ico','dragon-girl.png','pose-stand.png','pose-magic.png','pose-click.png','pose-treat.png','pose-drag.png','pose-sleep.png','使用说明.md','定制说明.md')) {
+foreach ($file in @('LMServicePet.exe','LMServicePet.exe.config','account_service.py','dragon-girl.ico','dragon-girl.png','pose-stand.png','pose-magic.png','pose-click.png','pose-treat.png','pose-drag.png','pose-sleep.png','pose-peektop.png','pose-peekright.png','使用说明.md','定制说明.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $destination $file) -Force
 }
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'runtime')) {

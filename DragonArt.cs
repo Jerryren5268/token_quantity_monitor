@@ -4,7 +4,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Reflection;
 
-enum DragonPose { Stand, Magic, Click, Treat, Drag, Sleep }
+enum DragonPose { Stand, Magic, Click, Treat, Drag, Sleep, PeekTop, PeekRight }
 
 static class DragonArt {
     public static Bitmap Frame(DragonPose pose) {

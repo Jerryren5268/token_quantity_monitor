@@ -3,7 +3,7 @@ $petCompiler = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $petSources = Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' | ForEach-Object FullName
 $petIcon = Join-Path $PSScriptRoot 'dragon-girl.ico'
 $petExtra = @()
-foreach ($pose in @('stand','magic','click','treat','drag','sleep')) {
+foreach ($pose in @('stand','magic','click','treat','drag','sleep','peektop','peekright')) {
     $petSprite = Join-Path $PSScriptRoot ('pose-' + $pose + '.png')
     $petExtra += ('/resource:' + $petSprite + ',DragonGirl_' + $pose)
 }

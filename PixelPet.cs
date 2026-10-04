@@ -19,7 +19,9 @@ class PixelPet : Form {
     readonly System.Windows.Forms.Timer refreshTimer=new System.Windows.Forms.Timer(); string headAmount="—",headNote="等待更新";
     SpendBubble spendBubble;
     readonly NotifyIcon tray=new NotifyIcon();readonly EventWaitHandle wake; RegisteredWaitHandle wakeRegistration;readonly string settingsFile;
-    readonly Bitmap[] frames=new Bitmap[6];int frame=-1,tick,badgeTop;bool dragging,pressed,quitting,fetching;Point down,origin;int logicalSize=280,refreshMinutes=5,petScalePercent=75;
+    readonly Bitmap[] frames=new Bitmap[8];int frame=-1,tick,badgeTop;bool dragging,pressed,quitting,fetching;Point down,origin;int logicalSize=280,refreshMinutes=5,petScalePercent=75;
+    PetEdge edge=PetEdge.None;
+    readonly Bitmap[] renderedFrames=new Bitmap[8];
     DateTime lastInteraction=DateTime.UtcNow,poseUntil=DateTime.MinValue;
     public PixelPet(EventWaitHandle wakeEvent){wake=wakeEvent;settingsFile=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"LMServiceQuota","settings.json");
         Text="LMService 龙娘";FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;AutoScaleMode=AutoScaleMode.None;ClientSize=new Size(196,324);BackColor=Color.Magenta;TransparencyKey=Color.Magenta;DoubleBuffered=true;Cursor=Cursors.Hand;
@@ -38,13 +40,13 @@ class PixelPet : Form {
         menu.Items.Add("隐藏到托盘",null,(s,e)=>{card.Hide();Hide();animation.Stop();});menu.Items.Add(new ToolStripSeparator());menu.Items.Add("退出桌宠",null,(s,e)=>Quit());ContextMenuStrip=menu;
         tray.Text="LMService 龙娘 · 双击显示";using(var ico=Icon.ExtractAssociatedIcon(Application.ExecutablePath))tray.Icon=(Icon)ico.Clone();tray.ContextMenuStrip=menu;tray.DoubleClick+=(s,e)=>ShowPet();tray.Visible=true;
         wakeRegistration=ThreadPool.RegisterWaitForSingleObject(wake,(s,t)=>{try{if(!IsDisposed)BeginInvoke((Action)ShowPet);}catch{}},null,-1,false);animation.Interval=100;animation.Tick+=(s,e)=>{tick++;ResolvePose();Invalidate();};
-        Shown+=async(s,e)=>{FitSize();ClampPosition();SetFrame((int)DragonPose.Stand);animation.Start();await card.RestoreState();if(refreshMinutes>0)await card.RefreshData();if(!IsDisposed)ApplyRefreshMode();};
+        Shown+=async(s,e)=>{FitSize();ClampPosition();DockNearEdge();SetFrame((int)DragonPose.Stand);ResolvePose();animation.Start();await card.RestoreState();if(refreshMinutes>0)await card.RefreshData();if(!IsDisposed)ApplyRefreshMode();};
         MouseDown+=(s,e)=>{if(e.Button!=MouseButtons.Left)return;pressed=true;dragging=false;down=Cursor.Position;origin=Location;Capture=true;ShowTemporary(DragonPose.Click,800);};
-        MouseMove+=(s,e)=>{if(!pressed)return;var p=Cursor.Position;int dx=p.X-down.X,dy=p.Y-down.Y;if(Math.Abs(dx)>4||Math.Abs(dy)>4){if(!dragging){dragging=true;poseUntil=DateTime.MinValue;SetPose(DragonPose.Drag);}}if(dragging){Location=new Point(origin.X+dx,origin.Y+dy);if(card.Visible)card.Hide();}};
-        MouseUp+=async(s,e)=>{if(e.Button!=MouseButtons.Left||!pressed)return;pressed=false;Capture=false;lastInteraction=DateTime.UtcNow;if(dragging){dragging=false;poseUntil=DateTime.MinValue;ResolvePose();ClampPosition();SavePosition();return;}if(card.Visible)card.Hide();else{card.TopMost=TopMost;card.ShowNear(ActiveBounds);await card.OnOpen();}};
-        MouseCaptureChanged+=(s,e)=>{if(pressed&&!Capture){pressed=false;dragging=false;ResolvePose();ClampPosition();SavePosition();}};
+        MouseMove+=(s,e)=>{if(!pressed)return;var p=Cursor.Position;int dx=p.X-down.X,dy=p.Y-down.Y;if(Math.Abs(dx)>4||Math.Abs(dy)>4){if(!dragging){dragging=true;edge=PetEdge.None;poseUntil=DateTime.MinValue;SetPose(DragonPose.Drag);}}if(dragging){Location=new Point(origin.X+dx,origin.Y+dy);if(card.Visible)card.Hide();}};
+        MouseUp+=async(s,e)=>{if(e.Button!=MouseButtons.Left||!pressed)return;pressed=false;Capture=false;lastInteraction=DateTime.UtcNow;if(dragging){dragging=false;poseUntil=DateTime.MinValue;ClampPosition();DockNearEdge();ResolvePose();SavePosition();return;}if(card.Visible)card.Hide();else{card.TopMost=TopMost;card.ShowNear(ActiveBounds);await card.OnOpen();}};
+        MouseCaptureChanged+=(s,e)=>{if(pressed&&!Capture){pressed=false;dragging=false;poseUntil=DateTime.MinValue;ClampPosition();DockNearEdge();ResolvePose();SavePosition();}};
         FormClosing+=(s,e)=>{if(!quitting){quitting=true;SavePosition();}if(spendBubble!=null&&!spendBubble.IsDisposed)spendBubble.Close();refreshTimer.Stop();animation.Stop();tray.Visible=false;pipe.Dispose();card.Dispose();};
-        FormClosed+=(s,e)=>{if(wakeRegistration!=null)wakeRegistration.Unregister(null);tray.Dispose();animation.Dispose();refreshTimer.Dispose();foreach(var f in frames)f.Dispose();};
+        FormClosed+=(s,e)=>{if(wakeRegistration!=null)wakeRegistration.Unregister(null);tray.Dispose();animation.Dispose();refreshTimer.Dispose();foreach(var f in frames)f.Dispose();foreach(var f in renderedFrames)if(f!=null)f.Dispose();};
     }
     [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
     void ApplyRefreshMode(){refreshTimer.Stop();card.SetRefreshMode(refreshMinutes);if(refreshMinutes>0){refreshTimer.Interval=refreshMinutes*60000;refreshTimer.Start();}}
@@ -64,10 +66,12 @@ class PixelPet : Form {
         }
     });}
     void Quit(){quitting=true;SavePosition();Close();}
-    Rectangle ActiveBounds {get{return new Rectangle(Left,Top+badgeTop,Width,Height-badgeTop);}}
+    bool Peeking {get{return frame==(int)DragonPose.PeekTop||frame==(int)DragonPose.PeekRight;}}
+    Rectangle ActiveBounds {get{return Peeking?Bounds:new Rectangle(Left,Top+badgeTop,Width,Height-badgeTop);}}
+    Rectangle SpriteBounds {get{return new Rectangle(0,Peeking?0:ClientSize.Height-logicalSize,logicalSize,logicalSize);}}
     void SetPose(DragonPose pose){if(frame!=(int)pose)SetFrame((int)pose);}
-    void ShowTemporary(DragonPose pose,int milliseconds){lastInteraction=DateTime.UtcNow;poseUntil=lastInteraction.AddMilliseconds(milliseconds);SetPose(pose);}
-    void ResolvePose(){if(frame<0)return;var now=DateTime.UtcNow;if(dragging){SetPose(DragonPose.Drag);return;}if(fetching){SetPose(DragonPose.Magic);return;}if(now<poseUntil)return;SetPose(now-lastInteraction>TimeSpan.FromSeconds(90)?DragonPose.Sleep:DragonPose.Stand);}
+    void ShowTemporary(DragonPose pose,int milliseconds){lastInteraction=DateTime.UtcNow;poseUntil=lastInteraction.AddMilliseconds(milliseconds);SetPose(edge==PetEdge.Top?DragonPose.PeekTop:edge==PetEdge.Right?DragonPose.PeekRight:pose);}
+    void ResolvePose(){if(frame<0)return;var now=DateTime.UtcNow;if(dragging){SetPose(DragonPose.Drag);return;}if(edge!=PetEdge.None){SetPose(edge==PetEdge.Top?DragonPose.PeekTop:DragonPose.PeekRight);return;}if(fetching){SetPose(DragonPose.Magic);return;}if(now<poseUntil)return;SetPose(now-lastInteraction>TimeSpan.FromSeconds(90)?DragonPose.Sleep:DragonPose.Stand);}
     void ShowPet(){lastInteraction=DateTime.UtcNow;poseUntil=DateTime.MinValue;Show();ResolvePose();ClampPosition();animation.Start();Activate();}
     void FitSize(){
         double dpi=96;try{uint value=GetDpiForWindow(Handle);if(value>0)dpi=value;}catch{}
@@ -76,17 +80,27 @@ class PixelPet : Form {
         ClientSize=new Size(logicalSize,logicalSize+badgeHeight);
         if(frame>=0)SetFrame(frame);
     }
-    void ClampPosition(){var area=Screen.FromRectangle(Bounds).WorkingArea;Location=new Point(Math.Max(area.Left,Math.Min(Left,area.Right-Width)),Math.Max(area.Top,Math.Min(Top,area.Bottom-Height)));}
-    void LoadPosition(){try{if(!File.Exists(settingsFile))return;var d=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(settingsFile));Location=new Point(Convert.ToInt32(d["x"]),Convert.ToInt32(d["y"]));TopMost=Style.Yes(d,"topmost");var size=Style.Number(d,"petScalePercent");if(size.HasValue)petScalePercent=(int)Math.Max(50,Math.Min(200,size.Value));var frequency=Style.Number(d,"refreshMinutes");if(frequency.HasValue)refreshMinutes=(int)Math.Max(0,Math.Min(1440,frequency.Value));ClampPosition();}catch{}}
-    bool SavePosition(){try{Directory.CreateDirectory(Path.GetDirectoryName(settingsFile));var text=new JavaScriptSerializer().Serialize(new {x=Left,y=Top,topmost=TopMost,refreshMinutes=refreshMinutes,petScalePercent=petScalePercent});var tmp=settingsFile+".tmp";File.WriteAllText(tmp,text);if(File.Exists(settingsFile))File.Replace(tmp,settingsFile,null);else File.Move(tmp,settingsFile);return true;}catch{return false;}}
+    void ClampPosition(){Location=EdgeDock.Clamp(Bounds,Screen.FromRectangle(Bounds).WorkingArea,edge);}
+    void DockNearEdge(){var area=Screen.FromRectangle(Bounds).WorkingArea;edge=EdgeDock.Detect(Bounds,area,Math.Max(14,(int)Math.Round(logicalSize*0.09)));ClampPosition();}
+    void LoadPosition(){try{if(!File.Exists(settingsFile))return;var d=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(settingsFile));Location=new Point(Convert.ToInt32(d["x"]),Convert.ToInt32(d["y"]));TopMost=Style.Yes(d,"topmost");string savedEdge=Style.Text(d,"edge");edge=savedEdge=="Top"?PetEdge.Top:savedEdge=="Right"?PetEdge.Right:PetEdge.None;var size=Style.Number(d,"petScalePercent");if(size.HasValue)petScalePercent=(int)Math.Max(50,Math.Min(200,size.Value));var frequency=Style.Number(d,"refreshMinutes");if(frequency.HasValue)refreshMinutes=(int)Math.Max(0,Math.Min(1440,frequency.Value));ClampPosition();}catch{}}
+    bool SavePosition(){try{Directory.CreateDirectory(Path.GetDirectoryName(settingsFile));var text=new JavaScriptSerializer().Serialize(new {x=Left,y=Top,topmost=TopMost,refreshMinutes=refreshMinutes,petScalePercent=petScalePercent,edge=edge.ToString()});var tmp=settingsFile+".tmp";File.WriteAllText(tmp,text);if(File.Exists(settingsFile))File.Replace(tmp,settingsFile,null);else File.Move(tmp,settingsFile);return true;}catch{return false;}}
+    Bitmap RenderedFrame(int value){
+        var cached=renderedFrames[value];if(cached!=null&&cached.Width==logicalSize)return cached;if(cached!=null)cached.Dispose();
+        var bitmap=new Bitmap(logicalSize,logicalSize,PixelFormat.Format32bppArgb);
+        using(var g=Graphics.FromImage(bitmap)){g.Clear(Color.Transparent);g.InterpolationMode=InterpolationMode.HighQualityBicubic;g.PixelOffsetMode=PixelOffsetMode.HighQuality;g.DrawImage(frames[value],new Rectangle(0,0,logicalSize,logicalSize));}
+        // WinForms color-key windows require an opaque mask to avoid a magenta halo.
+        for(int y=0;y<bitmap.Height;y++)for(int x=0;x<bitmap.Width;x++){var p=bitmap.GetPixel(x,y);bitmap.SetPixel(x,y,p.A<128?Color.Transparent:Color.FromArgb(255,p.R,p.G,p.B));}
+        renderedFrames[value]=bitmap;return bitmap;
+    }
     void SetFrame(int value){
-        frame=value;var b=frames[frame];var region=new Region();region.MakeEmpty();float scale=logicalSize/(float)b.Height;
-        float offsetX=(ClientSize.Width-b.Width*scale)/2f,offsetY=ClientSize.Height-logicalSize;
-        int firstVisible=b.Height;
+        frame=value;var b=RenderedFrame(frame);var region=new Region();region.MakeEmpty();float scale=1;
+        float offsetX=SpriteBounds.X,offsetY=SpriteBounds.Y;
+        int firstVisible=b.Height,lastVisible=0;
         for(int y=0;y<b.Height&&firstVisible==b.Height;y++)for(int x=0;x<b.Width;x++)if(b.GetPixel(x,y).A>=128){firstVisible=y;break;}
         if(firstVisible==b.Height)firstVisible=0;
         int badgeHeight=ClientSize.Height-logicalSize,badgeWidth=Math.Min(ClientSize.Width-2,Math.Max(120,(int)Math.Round(logicalSize*0.72)));
-        badgeTop=Math.Max(1,(int)Math.Round(offsetY+firstVisible*scale-badgeHeight+2));
+        if(Peeking){for(int y=b.Height-1;y>=0&&lastVisible==0;y--)for(int x=0;x<b.Width;x++)if(b.GetPixel(x,y).A>=128){lastVisible=y+1;break;}}
+        badgeTop=Peeking?Math.Min(ClientSize.Height-badgeHeight,(int)Math.Ceiling(lastVisible*scale)+2):Math.Max(1,(int)Math.Round(offsetY+firstVisible*scale-badgeHeight+2));
         using(var badge=Style.Round(new Rectangle((ClientSize.Width-badgeWidth)/2,badgeTop,badgeWidth,badgeHeight-2),8))region.Union(badge);
         for(int y=0;y<b.Height;y++){int x=0;while(x<b.Width){while(x<b.Width&&b.GetPixel(x,y).A<128)x++;int start=x;while(x<b.Width&&b.GetPixel(x,y).A>=128)x++;if(x>start)region.Union(new RectangleF(offsetX+start*scale,offsetY+y*scale-2,(x-start)*scale,scale+2));}}
         var old=Region;Region=region;if(old!=null)old.Dispose();Invalidate();
@@ -94,10 +108,10 @@ class PixelPet : Form {
     protected override void OnPaint(PaintEventArgs e){
         if(frame<0)return;int bob=(frame==(int)DragonPose.Stand||frame==(int)DragonPose.Magic)&&(tick%30>=15)?2:0;
         e.Graphics.InterpolationMode=InterpolationMode.HighQualityBicubic;e.Graphics.PixelOffsetMode=PixelOffsetMode.HighQuality;
-        e.Graphics.DrawImage(frames[frame],new Rectangle(0,ClientSize.Height-logicalSize-bob,logicalSize,logicalSize));
+        var sprite=SpriteBounds;sprite.Y-=bob;e.Graphics.DrawImageUnscaled(RenderedFrame(frame),sprite.X,sprite.Y);
         float factor=logicalSize/280f;int badgeHeight=ClientSize.Height-logicalSize;
         int badgeWidth=Math.Min(ClientSize.Width-2,Math.Max(120,(int)Math.Round(logicalSize*0.72))),badgeX=(ClientSize.Width-badgeWidth)/2;
-        e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;using(var badge=Style.Round(new Rectangle(badgeX,badgeTop,badgeWidth,badgeHeight-2),8))using(var fill=new SolidBrush(Style.Cream))e.Graphics.FillPath(fill,badge);
+        e.Graphics.SmoothingMode=SmoothingMode.None;using(var badge=Style.Round(new Rectangle(badgeX,badgeTop,badgeWidth,badgeHeight-2),8))using(var fill=new SolidBrush(Style.Cream))e.Graphics.FillPath(fill,badge);
         using(var font=Style.Font(13*factor,true))TextRenderer.DrawText(e.Graphics,headAmount,font,new Rectangle(badgeX,badgeTop+1,badgeWidth,(int)(24*factor)),Style.Ink,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis);
         using(var font=Style.Font(6.8f*factor))TextRenderer.DrawText(e.Graphics,headNote,font,new Rectangle(badgeX,badgeTop+(int)(24*factor),badgeWidth,(int)(17*factor)),Style.Muted,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis);
     }
