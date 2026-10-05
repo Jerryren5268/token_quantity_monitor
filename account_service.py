@@ -334,7 +334,7 @@ class Account:
         if action == 'forget_username':
             self.store.forget_username()
             self.username = ''; self.profile_notice = ''
-            if self.authenticated():
+            if self.authenticated() or self.store.path.exists():
                 self.save()
             return {'username':'','message':'已清除记住的账号。'}
         if action == 'plans':
