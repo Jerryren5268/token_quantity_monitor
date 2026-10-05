@@ -12,6 +12,7 @@ New-Item -ItemType Directory -Path $destination -Force | Out-Null
 foreach ($file in @('LMServicePet.exe','LMServicePet.exe.config','account_service.py','dragon-girl.ico','dragon-girl.png','pose-stand.png','pose-magic.png','pose-click.png','pose-treat.png','pose-drag.png','pose-sleep.png','pose-peektop.png','pose-peekright.png','使用说明.md','定制说明.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $destination $file) -Force
 }
+Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'pose-walk-*.png' | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $destination -Force }
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'runtime')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'runtime') -Destination $destination -Recurse -Force
 }

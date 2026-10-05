@@ -23,12 +23,14 @@ class PixelPet : Form {
     PetEdge edge=PetEdge.None;
     readonly Bitmap[] renderedFrames=new Bitmap[8];
     readonly PetRoaming roaming=new PetRoaming();
-    readonly Bitmap[,] walkFrames=new Bitmap[2,4];readonly Bitmap[] walkMasks=new Bitmap[2];
+    readonly Bitmap[] walkingSources=new Bitmap[8];
+    readonly Bitmap[,] walkFrames=new Bitmap[2,8];readonly Bitmap[] walkMasks=new Bitmap[2];
     bool roamingEnabled=true,settingsOpen;ToolStripMenuItem roamingItem;
     DateTime lastInteraction=DateTime.UtcNow,poseUntil=DateTime.MinValue;
     public PixelPet(EventWaitHandle wakeEvent){wake=wakeEvent;settingsFile=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"LMServiceQuota","settings.json");
         Text="LMService 龙娘";FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;AutoScaleMode=AutoScaleMode.None;ClientSize=new Size(196,324);BackColor=Color.Magenta;TransparencyKey=Color.Magenta;DoubleBuffered=true;Cursor=Cursors.Hand;
         for(int i=0;i<frames.Length;i++)frames[i]=DragonArt.Frame((DragonPose)i);
+        for(int i=0;i<walkingSources.Length;i++)walkingSources[i]=DragonArt.WalkingFrame(i);
         var area=Screen.PrimaryScreen.WorkingArea;Location=new Point(area.Right-150,area.Bottom-145);LoadPosition();
         card=new QuotaCard(pipe);card.OverPet=()=>ActiveBounds.Contains(Cursor.Position);
         card.QuotaChanged=(amount,note)=>{headAmount=amount;headNote=note;Invalidate();};
@@ -50,7 +52,7 @@ class PixelPet : Form {
         MouseUp+=async(s,e)=>{if(e.Button!=MouseButtons.Left||!pressed)return;pressed=false;Capture=false;lastInteraction=DateTime.UtcNow;if(dragging){dragging=false;poseUntil=DateTime.MinValue;ClampPosition();DockNearEdge();ResolvePose();SavePosition();return;}if(card.Visible)card.Hide();else{card.TopMost=TopMost;card.ShowNear(ActiveBounds);await card.OnOpen();}};
         MouseCaptureChanged+=(s,e)=>{if(pressed&&!Capture){pressed=false;dragging=false;poseUntil=DateTime.MinValue;ClampPosition();DockNearEdge();ResolvePose();SavePosition();}};
         FormClosing+=(s,e)=>{if(!quitting){quitting=true;SavePosition();}if(spendBubble!=null&&!spendBubble.IsDisposed)spendBubble.Close();refreshTimer.Stop();animation.Stop();tray.Visible=false;pipe.Dispose();card.Dispose();};
-        FormClosed+=(s,e)=>{if(wakeRegistration!=null)wakeRegistration.Unregister(null);tray.Dispose();animation.Dispose();refreshTimer.Dispose();foreach(var f in frames)f.Dispose();foreach(var f in renderedFrames)if(f!=null)f.Dispose();foreach(var f in walkFrames)if(f!=null)f.Dispose();foreach(var f in walkMasks)if(f!=null)f.Dispose();};
+        FormClosed+=(s,e)=>{if(wakeRegistration!=null)wakeRegistration.Unregister(null);tray.Dispose();animation.Dispose();refreshTimer.Dispose();foreach(var f in frames)f.Dispose();foreach(var f in renderedFrames)if(f!=null)f.Dispose();foreach(var f in walkingSources)f.Dispose();foreach(var f in walkFrames)if(f!=null)f.Dispose();foreach(var f in walkMasks)if(f!=null)f.Dispose();};
     }
     [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
     void ApplyRefreshMode(){refreshTimer.Stop();card.SetRefreshMode(refreshMinutes);if(refreshMinutes>0){refreshTimer.Interval=refreshMinutes*60000;refreshTimer.Start();}}
@@ -113,27 +115,23 @@ class PixelPet : Form {
         int direction=roaming.FacingLeft?1:0;
         if(walkFrames[direction,0]!=null&&walkFrames[direction,0].Width==logicalSize)return;
         if(walkMasks[direction]!=null)walkMasks[direction].Dispose();
-        var source=RenderedFrame((int)DragonPose.Stand);
-        for(int phase=0;phase<4;phase++){
+        for(int phase=0;phase<8;phase++){
             if(walkFrames[direction,phase]!=null)walkFrames[direction,phase].Dispose();
             var bitmap=new Bitmap(logicalSize,logicalSize,PixelFormat.Format32bppArgb);
             using(var g=Graphics.FromImage(bitmap)){
                 g.Clear(Color.Transparent);g.InterpolationMode=InterpolationMode.HighQualityBicubic;g.PixelOffsetMode=PixelOffsetMode.HighQuality;
-                float lift=(phase%2==1)?Math.Max(1,logicalSize/100f):0;
-                g.TranslateTransform(logicalSize/2f,logicalSize/2f-lift);
-                if(direction==1)g.ScaleTransform(-1,1);
-                g.RotateTransform(phase==0?-2:phase==2?2:0);
-                g.DrawImage(source,new RectangleF(-logicalSize*0.48f,-logicalSize*0.48f,logicalSize*0.96f,logicalSize*0.96f));
+                if(direction==1){g.TranslateTransform(logicalSize,0);g.ScaleTransform(-1,1);}
+                g.DrawImage(walkingSources[phase],new Rectangle(0,0,logicalSize,logicalSize));
             }
             for(int y=0;y<logicalSize;y++)for(int x=0;x<logicalSize;x++){var p=bitmap.GetPixel(x,y);bitmap.SetPixel(x,y,p.A<128?Color.Transparent:Color.FromArgb(255,p.R,p.G,p.B));}
             walkFrames[direction,phase]=bitmap;
         }
         // One stable hit region covers every gait phase, so the feet remain clickable.
         var mask=new Bitmap(logicalSize,logicalSize,PixelFormat.Format32bppArgb);
-        for(int y=0;y<logicalSize;y++)for(int x=0;x<logicalSize;x++)for(int phase=0;phase<4;phase++)if(walkFrames[direction,phase].GetPixel(x,y).A>=128){mask.SetPixel(x,y,Color.White);break;}
+        for(int y=0;y<logicalSize;y++)for(int x=0;x<logicalSize;x++)for(int phase=0;phase<8;phase++)if(walkFrames[direction,phase].GetPixel(x,y).A>=128){mask.SetPixel(x,y,Color.White);break;}
         walkMasks[direction]=mask;
     }
-    Bitmap SpriteForPaint(){if(!WalkingPose)return RenderedFrame(frame);PrepareWalkingFrames();return walkFrames[roaming.FacingLeft?1:0,(tick/3)%4];}
+    Bitmap SpriteForPaint(){if(!WalkingPose)return RenderedFrame(frame);PrepareWalkingFrames();return walkFrames[roaming.FacingLeft?1:0,(tick/2)%8];}
     Bitmap SpriteForRegion(){if(!WalkingPose)return RenderedFrame(frame);PrepareWalkingFrames();return walkMasks[roaming.FacingLeft?1:0];}
     void SetFrame(int value){
         frame=value;var b=SpriteForRegion();var region=new Region();region.MakeEmpty();float scale=1;
