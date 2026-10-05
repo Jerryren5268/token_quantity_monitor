@@ -54,6 +54,7 @@ class SessionStore:
     def __init__(self, directory=None):
         self.directory = Path(directory or Path(os.environ['LOCALAPPDATA']) / 'LMServiceQuota')
         self.path = self.directory / 'session.dpapi'
+        self.profile_path = self.directory / 'account.dpapi'
 
     def load(self):
         if not self.path.exists():
@@ -61,17 +62,32 @@ class SessionStore:
         return json.loads(protect(self.path.read_bytes(), decrypt=True).decode('utf-8'))
 
     def save(self, data):
+        self.write_encrypted(self.path, data)
+
+    def write_encrypted(self, path, data):
         encrypted = protect(json.dumps(data, ensure_ascii=True).encode())
         self.directory.mkdir(parents=True, exist_ok=True)
-        temp = self.path.with_suffix('.tmp-' + secrets.token_hex(4))
+        temp = path.with_suffix('.tmp-' + secrets.token_hex(4))
         try:
             temp.write_bytes(encrypted)
-            os.replace(temp, self.path)
+            os.replace(temp, path)
         finally:
             temp.unlink(missing_ok=True)
 
     def clear(self):
         self.path.unlink(missing_ok=True)
+
+    def load_username(self):
+        if not self.profile_path.exists():
+            return ''
+        data = json.loads(protect(self.profile_path.read_bytes(), decrypt=True).decode('utf-8'))
+        return str(data.get('username') or '').strip() if data.get('version') == 1 else ''
+
+    def save_username(self, username):
+        self.write_encrypted(self.profile_path, {'version': 1, 'username': username})
+
+    def forget_username(self):
+        self.profile_path.unlink(missing_ok=True)
 
 class Account:
     def __init__(self, store=None):
@@ -87,6 +103,13 @@ class Account:
         self.quotes = {}
         self.cache = {'site': None, 'personal': None}
         self.notice = ''
+        self.username = ''
+        self.pending_username = ''
+        self.profile_notice = ''
+        try:
+            self.username = self.store.load_username()
+        except Exception:
+            self.profile_notice = '记住的账号无法读取，请重新输入账号。'
         try:
             saved = self.store.load()
             if saved and saved.get('version') == 1:
@@ -94,12 +117,27 @@ class Account:
                 self.expiry = float(saved.get('expiry') or 0)
                 self.sid = str(saved.get('sid') or '')
                 self.unit = saved.get('unit')
+                if not self.username and saved.get('username'):
+                    self.remember_username(saved['username'])
                 for item in saved.get('cookies', []):
                     if item.get('domain', '').lstrip('.') == DOMAIN:
                         self.cookies.set_cookie(Cookie(**item))
         except Exception:
             self.token = ''; self.expiry = 0; self.sid = ''; self.cookies.clear()
             self.notice = '保存的登录状态无法读取，请重新登录。'
+
+    def remember_username(self, username):
+        username = str(username or '').strip()
+        if not username:
+            return
+        if username == self.username and self.store.profile_path.exists():
+            return
+        self.username = username
+        try:
+            self.store.save_username(username)
+            self.profile_notice = ''
+        except Exception:
+            self.profile_notice = '账号未能保存到本机，下次可能需要重新输入账号。'
 
     def save(self):
         cookies = []
@@ -111,13 +149,15 @@ class Account:
             cookies.append(item)
         try:
             self.store.save({'version': 1, 'token': self.token, 'expiry': self.expiry,
-                             'sid': self.sid, 'unit': self.unit, 'cookies': cookies})
+                             'sid': self.sid, 'unit': self.unit, 'cookies': cookies,
+                             'username': self.username})
             self.notice = ''
         except Exception:
             self.notice = '已登录，但 Windows 未能保存会话；退出后需重新登录。'
 
     def clear(self):
         self.token = ''; self.sid = ''; self.expiry = 0; self.flow = ''
+        self.pending_username = ''
         self.cookies.clear(); self.quotes.clear(); self.cache['personal'] = None
         try:
             self.store.clear()
@@ -126,7 +166,7 @@ class Account:
             self.notice = '内存会话已清除，但磁盘会话删除失败。请关闭程序并检查文件权限。'
 
     def authenticated(self):
-        return bool(self.token or any(True for _ in self.cookies))
+        return bool(self.token or any(c.name == 'new_api_refresh' and not c.is_expired() for c in self.cookies))
 
     def raw(self, path, body=None, auth=False):
         headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
@@ -180,12 +220,15 @@ class Account:
     def accept(self, data):
         if data.get('access_token'):
             self.token = data['access_token']; self.expiry = data.get('access_expires_at',0)
-            self.sid = data.get('session',{}).get('sid',''); self.flow = ''
+            self.sid = data.get('session',{}).get('sid',self.sid); self.flow = ''
+            if self.pending_username:
+                self.remember_username(self.pending_username)
+                self.pending_username = ''
             self.save()
-            return {'logged_in': True, 'message': self.notice or '登录成功，下次会记住登录状态。'}
+            return {'logged_in': True, 'username': self.username, 'message': self.notice or self.profile_notice or '登录成功，已记住账号与登录状态。'}
         if data.get('flow_token'):
             self.flow = data['flow_token']
-            return {'needs_2fa': True, 'message': '请输入验证器验证码。'}
+            return {'needs_2fa': True, 'username': self.pending_username, 'message': '请输入验证器验证码。'}
         raise ValueError('登录未返回有效会话，请检查账户验证要求。')
 
     def login(self, username, password):
@@ -194,10 +237,19 @@ class Account:
         if settings.get('turnstile_check'): raise ValueError('网站要求网页验证码，当前桌宠无法完成该验证。')
         if settings.get('password_login_encryption_enabled'): raise ValueError('网站启用了额外密码加密，需要更新登录组件。')
         self.clear(); self.unit = settings.get('quota_per_unit')
-        return self.accept(self.request('/api/user/login?turnstile=', {'username':username.strip(),'password':password}))
+        self.pending_username = username.strip()
+        try:
+            return self.accept(self.request('/api/user/login?turnstile=', {'username':username.strip(),'password':password}))
+        except Exception:
+            self.pending_username = ''
+            raise
 
     def personal(self):
         user = self.request('/api/user/self', auth=True)
+        # Migrate existing sessions without requiring another password login.
+        if user.get('username') and str(user['username']).strip() != self.username:
+            self.remember_username(user['username'])
+            self.save()
         if not self.unit:
             self.unit = self.request('/api/status').get('quota_per_unit'); self.save()
         result = {'balance':user.get('quota'), 'used':user.get('used_quota'), 'unit':self.unit, 'subscriptions':[], 'subscription_error':None}
@@ -268,17 +320,23 @@ class Account:
 
     def dispatch(self, args):
         action = args.get('action')
-        if action == 'state': return {'logged_in':self.authenticated(),'message':self.notice}
+        if action == 'state': return {'logged_in':self.authenticated(),'username':self.username,'message':self.notice or self.profile_notice}
         if action == 'summary':
             with ThreadPoolExecutor(max_workers=2) as pool:
                 site = pool.submit(self.snapshot,'site'); personal = pool.submit(self.snapshot,'personal')
-                return {'site':site.result(),'personal':personal.result(),'logged_in':self.authenticated(),'message':self.notice}
+                return {'site':site.result(),'personal':personal.result(),'logged_in':self.authenticated(),'username':self.username,'message':self.notice or self.profile_notice}
         if action == 'login': return self.login(args.get('username',''),args.get('password',''))
         if action == 'verify':
             if not self.flow: raise ValueError('请先输入账号密码登录。')
             return self.accept(self.request('/api/user/login/verify',{'flow_token':self.flow,'method':'2fa','code':args.get('code','').strip()}))
         if action == 'logout':
-            self.clear(); return {'logged_in':False,'message':self.notice or '已退出，保存的登录状态已清除。'}
+            self.clear(); return {'logged_in':False,'username':self.username,'message':self.notice or '已退出登录，已保留账号；下次只需输入密码。'}
+        if action == 'forget_username':
+            self.store.forget_username()
+            self.username = ''; self.profile_notice = ''
+            if self.authenticated():
+                self.save()
+            return {'username':'','message':'已清除记住的账号。'}
         if action == 'plans':
             rows = self.plans(); self.quotes.clear(); output = []
             for row in rows:
