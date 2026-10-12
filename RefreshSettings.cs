@@ -6,12 +6,13 @@ class RefreshSettings : Form {
     readonly RadioButton automatic,manual;
     readonly NumericUpDown minutes;
     readonly TrackBar petSize;
-    readonly CheckBox roaming;
+    readonly CheckBox roaming,taskbar;
     public int RefreshMinutes {get{return manual.Checked?0:(int)minutes.Value;}}
     public int PetScalePercent {get{return petSize.Value;}}
     public bool RoamingEnabled {get{return roaming.Checked;}}
-    public RefreshSettings(int current,int currentScale=100,bool currentRoaming=true){
-        Text="桌宠设置";ClientSize=new Size(350,420);FormBorderStyle=FormBorderStyle.FixedDialog;
+    public bool TaskbarEnabled {get{return taskbar.Checked;}}
+    public RefreshSettings(int current,int currentScale=100,bool currentRoaming=true,bool currentTaskbar=false){
+        Text="桌宠设置";ClientSize=new Size(350,470);FormBorderStyle=FormBorderStyle.FixedDialog;
         MaximizeBox=false;MinimizeBox=false;ShowInTaskbar=false;StartPosition=FormStartPosition.CenterParent;
         AutoScaleDimensions=new SizeF(96,96);AutoScaleMode=AutoScaleMode.Dpi;BackColor=Style.Cream;Font=Style.Font(10);ForeColor=Style.Ink;
         automatic=new RadioButton{Text="自动刷新",Location=new Point(22,22),Size=new Size(125,28),Checked=current>0};
@@ -27,8 +28,10 @@ class RefreshSettings : Form {
         Controls.AddRange(new Control[]{sizeTitle,sizeValue,petSize,resetSize,new Label{Text="50%–200% · 保存后应用",Location=new Point(24,274),AutoSize=true,Font=Style.Font(8),ForeColor=Style.Muted}});
         roaming=new CheckBox{Text="随机散步",Checked=currentRoaming,Location=new Point(24,310),AutoSize=true};
         Controls.Add(roaming);Controls.Add(new Label{Text="拖动、查看额度和鼠标靠近时暂停。",Location=new Point(24,341),AutoSize=true,Font=Style.Font(8),ForeColor=Style.Muted});
-        var cancel=new SoftButton{Text="取消",Location=new Point(144,373),DialogResult=DialogResult.Cancel};
-        var save=new SoftButton{Text="保存",Location=new Point(239,373),Accent=true,DialogResult=DialogResult.OK};
+        taskbar=new CheckBox{Text="在任务栏显示",Checked=currentTaskbar,Location=new Point(24,368),AutoSize=true};
+        Controls.Add(taskbar);Controls.Add(new Label{Text="保存后立即生效，重启后记住选择。",Location=new Point(24,397),AutoSize=true,Font=Style.Font(8),ForeColor=Style.Muted});
+        var cancel=new SoftButton{Text="取消",Location=new Point(144,423),DialogResult=DialogResult.Cancel};
+        var save=new SoftButton{Text="保存",Location=new Point(239,423),Accent=true,DialogResult=DialogResult.OK};
         Controls.Add(cancel);Controls.Add(save);AcceptButton=save;CancelButton=cancel;
     }
 }

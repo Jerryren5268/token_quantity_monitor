@@ -25,13 +25,13 @@ class PixelPet : Form {
     readonly PetRoaming roaming=new PetRoaming();
     readonly Bitmap[] walkingSources=new Bitmap[8];
     readonly Bitmap[,] walkFrames=new Bitmap[2,8];readonly Bitmap[] walkMasks=new Bitmap[2];
-    bool roamingEnabled=true,settingsOpen;ToolStripMenuItem roamingItem;
+    bool roamingEnabled=true,settingsOpen,showInTaskbar=false;ToolStripMenuItem roamingItem;
     DateTime lastInteraction=DateTime.UtcNow,poseUntil=DateTime.MinValue;
     public PixelPet(EventWaitHandle wakeEvent){wake=wakeEvent;settingsFile=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"LMServiceQuota","settings.json");
         Text="LMService 龙娘";FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;AutoScaleMode=AutoScaleMode.None;ClientSize=new Size(196,324);BackColor=Color.Magenta;TransparencyKey=Color.Magenta;DoubleBuffered=true;Cursor=Cursors.Hand;
         for(int i=0;i<frames.Length;i++)frames[i]=DragonArt.Frame((DragonPose)i);
         for(int i=0;i<walkingSources.Length;i++)walkingSources[i]=DragonArt.WalkingFrame(i);
-        var area=Screen.PrimaryScreen.WorkingArea;Location=new Point(area.Right-150,area.Bottom-145);LoadPosition();
+        var area=Screen.PrimaryScreen.WorkingArea;Location=new Point(area.Right-150,area.Bottom-145);LoadPosition();ShowInTaskbar=showInTaskbar;
         card=new QuotaCard(pipe);card.OverPet=()=>ActiveBounds.Contains(Cursor.Position);
         card.QuotaChanged=(amount,note)=>{headAmount=amount;headNote=note;Invalidate();};
         card.SpendingDetected=(amount)=>{if(!Visible||IsDisposed)return;if(spendBubble!=null&&!spendBubble.IsDisposed)spendBubble.Close();spendBubble=new SpendBubble(this,amount);spendBubble.Show(this);};
@@ -44,9 +44,10 @@ class PixelPet : Form {
         roamingItem=new ToolStripMenuItem("随机散步"){Checked=roamingEnabled,CheckOnClick=true};roamingItem.CheckedChanged+=(s,e)=>{if(roamingEnabled==roamingItem.Checked)return;bool previous=roamingEnabled;roamingEnabled=roamingItem.Checked;PauseWalking(3);if(!SavePosition()){roamingEnabled=previous;roamingItem.Checked=previous;MessageBox.Show("散步设置保存失败，请检查本地目录权限。","桌宠设置");}};menu.Items.Add(roamingItem);
         var pinned=new ToolStripMenuItem("始终置顶"){Checked=TopMost,CheckOnClick=true};pinned.CheckedChanged+=(s,e)=>{TopMost=pinned.Checked;card.TopMost=TopMost;SavePosition();};menu.Items.Add(pinned);
         menu.Items.Add("隐藏到托盘",null,(s,e)=>{PauseWalking(3);card.Hide();Hide();animation.Stop();});menu.Items.Add(new ToolStripSeparator());menu.Items.Add("退出桌宠",null,(s,e)=>Quit());ContextMenuStrip=menu;
-        tray.Text="LMService 龙娘 · 双击显示";using(var ico=Icon.ExtractAssociatedIcon(Application.ExecutablePath))tray.Icon=(Icon)ico.Clone();tray.ContextMenuStrip=menu;tray.DoubleClick+=(s,e)=>ShowPet();tray.Visible=true;
+        tray.Text="LMService 龙娘 · 双击显示";using(var ico=Icon.ExtractAssociatedIcon(Application.ExecutablePath))Icon=(Icon)ico.Clone();tray.Icon=Icon;tray.ContextMenuStrip=menu;tray.DoubleClick+=(s,e)=>ShowPet();tray.Visible=true;
         wakeRegistration=ThreadPool.RegisterWaitForSingleObject(wake,(s,t)=>{try{if(!IsDisposed)BeginInvoke((Action)ShowPet);}catch{}},null,-1,false);animation.Interval=50;animation.Tick+=(s,e)=>{tick++;UpdateWalking();ResolvePose();Invalidate();};
         Shown+=async(s,e)=>{FitSize();ClampPosition();DockNearEdge();SetFrame((int)DragonPose.Stand);ResolvePose();animation.Start();await card.RestoreState();if(refreshMinutes>0)await card.RefreshData();if(!IsDisposed)ApplyRefreshMode();};
+        Resize+=(s,e)=>{if(WindowState==FormWindowState.Minimized){PauseWalking(3);card.Hide();}};
         MouseDown+=(s,e)=>{if(e.Button!=MouseButtons.Left)return;pressed=true;dragging=false;down=Cursor.Position;origin=Location;Capture=true;ShowTemporary(DragonPose.Click,800);};
         MouseMove+=(s,e)=>{if(!pressed)return;var p=Cursor.Position;int dx=p.X-down.X,dy=p.Y-down.Y;if(Math.Abs(dx)>4||Math.Abs(dy)>4){if(!dragging){dragging=true;edge=PetEdge.None;poseUntil=DateTime.MinValue;SetPose(DragonPose.Drag);}}if(dragging){Location=new Point(origin.X+dx,origin.Y+dy);if(card.Visible)card.Hide();}};
         MouseUp+=async(s,e)=>{if(e.Button!=MouseButtons.Left||!pressed)return;pressed=false;Capture=false;lastInteraction=DateTime.UtcNow;if(dragging){dragging=false;poseUntil=DateTime.MinValue;ClampPosition();DockNearEdge();ResolvePose();SavePosition();return;}if(card.Visible)card.Hide();else{card.TopMost=TopMost;card.ShowNear(ActiveBounds);await card.OnOpen();}};
@@ -56,22 +57,25 @@ class PixelPet : Form {
     }
     [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
     void ApplyRefreshMode(){refreshTimer.Stop();card.SetRefreshMode(refreshMinutes);if(refreshMinutes>0){refreshTimer.Interval=refreshMinutes*60000;refreshTimer.Start();}}
-    void ShowRefreshSettings(){settingsOpen=true;PauseWalking(3);try{card.WithSettings(()=>{
-        using(var dialog=new RefreshSettings(refreshMinutes,petScalePercent,roamingEnabled)){
+    void ShowRefreshSettings(){if(WindowState==FormWindowState.Minimized)ShowPet();settingsOpen=true;PauseWalking(3);try{card.WithSettings(()=>{
+        using(var dialog=new RefreshSettings(refreshMinutes,petScalePercent,roamingEnabled,showInTaskbar)){
             if(dialog.ShowDialog(card.Visible?(IWin32Window)card:this)!=DialogResult.OK)return;
             int previous=refreshMinutes,previousScale=petScalePercent;var previousPosition=Location;
-            bool previousRoaming=roamingEnabled;
+            bool previousRoaming=roamingEnabled,previousTaskbar=showInTaskbar;
             int center=Left+Width/2,bottom=Bottom;
-            refreshMinutes=dialog.RefreshMinutes;petScalePercent=dialog.PetScalePercent;roamingEnabled=dialog.RoamingEnabled;
+            refreshMinutes=dialog.RefreshMinutes;petScalePercent=dialog.PetScalePercent;roamingEnabled=dialog.RoamingEnabled;showInTaskbar=dialog.TaskbarEnabled;
             if(spendBubble!=null&&!spendBubble.IsDisposed)spendBubble.Close();
             FitSize();Location=new Point(center-Width/2,bottom-Height);ClampPosition();
             if(!SavePosition()){
-                refreshMinutes=previous;petScalePercent=previousScale;roamingEnabled=previousRoaming;FitSize();Location=previousPosition;ClampPosition();
+                refreshMinutes=previous;petScalePercent=previousScale;roamingEnabled=previousRoaming;showInTaskbar=previousTaskbar;FitSize();Location=previousPosition;ClampPosition();
                 MessageBox.Show("设置保存失败，请检查本地目录权限。","桌宠设置");
             }
             roamingItem.Checked=roamingEnabled;ApplyRefreshMode();if(card.Visible)card.ShowNear(ActiveBounds);
         }
-    });}finally{settingsOpen=false;PauseWalking(3);}}
+    });}finally{settingsOpen=false;PauseWalking(3);}
+        // Changing ShowInTaskbar recreates the native window. Wait until the modal dialog closes.
+        if(ShowInTaskbar!=showInTaskbar){var position=Location;ShowInTaskbar=showInTaskbar;Location=position;if(frame>=0)SetFrame(frame);}
+    }
     void Quit(){quitting=true;SavePosition();Close();}
     bool Peeking {get{return frame==(int)DragonPose.PeekTop||frame==(int)DragonPose.PeekRight;}}
     Rectangle ActiveBounds {get{return Peeking?Bounds:new Rectangle(Left,Top+badgeTop,Width,Height-badgeTop);}}
@@ -79,10 +83,11 @@ class PixelPet : Form {
     void SetPose(DragonPose pose){if(frame!=(int)pose)SetFrame((int)pose);}
     void ShowTemporary(DragonPose pose,int milliseconds){PauseWalking(3);lastInteraction=DateTime.UtcNow;poseUntil=lastInteraction.AddMilliseconds(milliseconds);SetPose(edge==PetEdge.Top?DragonPose.PeekTop:edge==PetEdge.Right?DragonPose.PeekRight:pose);}
     void ResolvePose(){if(frame<0)return;var now=DateTime.UtcNow;if(dragging){SetPose(DragonPose.Drag);return;}if(edge!=PetEdge.None){SetPose(edge==PetEdge.Top?DragonPose.PeekTop:DragonPose.PeekRight);return;}if(fetching){SetPose(DragonPose.Magic);return;}if(now<poseUntil)return;SetPose(!roaming.Walking&&now-lastInteraction>TimeSpan.FromSeconds(90)?DragonPose.Sleep:DragonPose.Stand);}
-    void ShowPet(){PauseWalking(3);lastInteraction=DateTime.UtcNow;poseUntil=DateTime.MinValue;Show();ResolvePose();ClampPosition();animation.Start();Activate();}
+    void ShowPet(){PauseWalking(3);lastInteraction=DateTime.UtcNow;poseUntil=DateTime.MinValue;WindowState=FormWindowState.Normal;Show();ResolvePose();ClampPosition();animation.Start();Activate();}
     void PauseWalking(int seconds){bool moving=roaming.Walking;roaming.Pause(DateTime.UtcNow,seconds);if(moving&&frame>=0){ResolvePose();SetFrame(frame);}}
     void UpdateWalking(){
         var now=DateTime.UtcNow;var hover=ActiveBounds;hover.Inflate(24,24);
+        if(WindowState==FormWindowState.Minimized){PauseWalking(3);return;}
         bool paused=!roamingEnabled||!Visible||pressed||dragging||fetching||settingsOpen||card.Visible||card.Busy||ContextMenuStrip.Visible||now<poseUntil||hover.Contains(Cursor.Position)||(spendBubble!=null&&!spendBubble.IsDisposed&&spendBubble.Visible);
         bool before=roaming.Walking;bool facing=roaming.FacingLeft;
         Location=roaming.Tick(Location,Size,Screen.FromRectangle(Bounds).WorkingArea,now,paused);
@@ -100,8 +105,8 @@ class PixelPet : Form {
     }
     void ClampPosition(){Location=EdgeDock.Clamp(Bounds,Screen.FromRectangle(Bounds).WorkingArea,edge);}
     void DockNearEdge(){var area=Screen.FromRectangle(Bounds).WorkingArea;edge=EdgeDock.Detect(Bounds,area,Math.Max(14,(int)Math.Round(logicalSize*0.09)));ClampPosition();}
-    void LoadPosition(){try{if(!File.Exists(settingsFile))return;var d=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(settingsFile));Location=new Point(Convert.ToInt32(d["x"]),Convert.ToInt32(d["y"]));TopMost=Style.Yes(d,"topmost");if(d.ContainsKey("roamingEnabled"))roamingEnabled=Style.Yes(d,"roamingEnabled");string savedEdge=Style.Text(d,"edge");edge=savedEdge=="Top"?PetEdge.Top:savedEdge=="Right"?PetEdge.Right:PetEdge.None;var size=Style.Number(d,"petScalePercent");if(size.HasValue)petScalePercent=(int)Math.Max(50,Math.Min(200,size.Value));var frequency=Style.Number(d,"refreshMinutes");if(frequency.HasValue)refreshMinutes=(int)Math.Max(0,Math.Min(1440,frequency.Value));ClampPosition();}catch{}}
-    bool SavePosition(){try{Directory.CreateDirectory(Path.GetDirectoryName(settingsFile));var text=new JavaScriptSerializer().Serialize(new {x=Left,y=Top,topmost=TopMost,refreshMinutes=refreshMinutes,petScalePercent=petScalePercent,roamingEnabled=roamingEnabled,edge=edge.ToString()});var tmp=settingsFile+".tmp";File.WriteAllText(tmp,text);if(File.Exists(settingsFile))File.Replace(tmp,settingsFile,null);else File.Move(tmp,settingsFile);return true;}catch{return false;}}
+    void LoadPosition(){try{if(!File.Exists(settingsFile))return;var d=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(settingsFile));Location=new Point(Convert.ToInt32(d["x"]),Convert.ToInt32(d["y"]));TopMost=Style.Yes(d,"topmost");if(d.ContainsKey("roamingEnabled"))roamingEnabled=Style.Yes(d,"roamingEnabled");if(d.ContainsKey("showInTaskbar"))showInTaskbar=Style.Yes(d,"showInTaskbar");string savedEdge=Style.Text(d,"edge");edge=savedEdge=="Top"?PetEdge.Top:savedEdge=="Right"?PetEdge.Right:PetEdge.None;var size=Style.Number(d,"petScalePercent");if(size.HasValue)petScalePercent=(int)Math.Max(50,Math.Min(200,size.Value));var frequency=Style.Number(d,"refreshMinutes");if(frequency.HasValue)refreshMinutes=(int)Math.Max(0,Math.Min(1440,frequency.Value));ClampPosition();}catch{}}
+    bool SavePosition(){try{Directory.CreateDirectory(Path.GetDirectoryName(settingsFile));var position=WindowState==FormWindowState.Normal?Location:RestoreBounds.Location;var text=new JavaScriptSerializer().Serialize(new {x=position.X,y=position.Y,topmost=TopMost,refreshMinutes=refreshMinutes,petScalePercent=petScalePercent,roamingEnabled=roamingEnabled,showInTaskbar=showInTaskbar,edge=edge.ToString()});var tmp=settingsFile+".tmp";File.WriteAllText(tmp,text);if(File.Exists(settingsFile))File.Replace(tmp,settingsFile,null);else File.Move(tmp,settingsFile);return true;}catch{return false;}}
     Bitmap RenderedFrame(int value){
         var cached=renderedFrames[value];if(cached!=null&&cached.Width==logicalSize)return cached;if(cached!=null)cached.Dispose();
         var bitmap=new Bitmap(logicalSize,logicalSize,PixelFormat.Format32bppArgb);

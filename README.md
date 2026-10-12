@@ -2,7 +2,7 @@
 
 Windows 原生龙娘桌宠，用来查看 LMService 个人订阅剩余额度、今日使用量与站点总额度。
 
-基于 WinForms，独立运行，不需要打开 Codex 或浏览器。当前版本：**1.2.5**。
+基于 WinForms，独立运行，不需要打开 Codex 或浏览器。当前版本：**1.2.6**。
 
 ![龙娘六种状态](docs/images/dragon-girl-six-states.png)
 
@@ -41,6 +41,7 @@ Windows 原生龙娘桌宠，用来查看 LMService 个人订阅剩余额度、�
 - 个人额度、今日已用、站点额度与再次订阅入口集中在同一页。
 - 自动刷新可设为 1–1440 分钟；也可选择仅手动刷新。
 - 桌宠大小支持 50%–200%，支持拖动、记住位置、置顶及隐藏到托盘。
+- “桌宠设置”可选择在任务栏显示，保存后立即生效并记住选择；任务栏使用龙娘头像图标，最小化时暂停散步，双击托盘图标可恢复。
 - 默认开启随机散步：在当前显示器的工作区缓慢移动，播放 Gemini 绘制的八帧侧身迈步动画，左右转向，走一段后停下来休息。
 - 检测到今日用量增加时播放扣钱动画。
 - 有有效重置时间时显示倒计时。
@@ -48,7 +49,7 @@ Windows 原生龙娘桌宠，用来查看 LMService 个人订阅剩余额度、�
 
 ## 安装
 
-从 [Releases](https://github.com/Jerryren5268/token_quantity_monitor/releases) 下载 Windows x64 安装包，完整解压后双击 `安装并启动.cmd`。GitHub 的 “Source code” 压缩包只含源码，不是可直接运行的安装包。
+从 [龙娘版 Releases](https://github.com/pyramixed938/token_quantity_monitor/releases) 下载 `LMService-DragonGirl-1.2.6-Windows-x64.zip`，完整解压后双击 `安装并启动.cmd`。GitHub 的 “Source code” 压缩包只含源码，不是可直接运行的安装包。
 更新前请先右键桌宠退出。安装会添加桌面快捷方式和 Windows 登录启动项，并保留已有设置与登录状态。
 
 需要 Windows 10/11 x64 与 .NET Framework 4.8。发行包包含 Python 3.12 运行时，无需安装 Codex。
